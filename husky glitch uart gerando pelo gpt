@@ -1,0 +1,85 @@
+# Importando as bibliotecas necessárias
+import chipwhisperer as cw
+import time
+import matplotlib.pyplot as plt
+
+# Parâmetros configuráveis
+TARGET_BAUDRATE = 115200  # Define a taxa de transmissão para comunicação UART
+UART_TRIGGER_STRING = "START_FAULT_INJECTION"  # String que, quando recebida via UART, dispara a injeção de falha
+
+# Definindo os intervalos para a injeção de falha
+VFI_VOLTAGE_START = 1.0  # Tensão inicial para injeção de falha
+VFI_VOLTAGE_END = 3.3    # Tensão final para injeção de falha
+VFI_VOLTAGE_STEP = 0.1   # Incremento da tensão a cada iteração
+
+VFI_DURATION_START = 1   # Duração inicial da injeção de falha em ciclos de clock
+VFI_DURATION_END = 50    # Duração final da injeção de falha em ciclos de clock
+VFI_DURATION_STEP = 1    # Incremento da duração a cada iteração
+
+# Conectando-se ao ChipWhisperer Husky
+scope = cw.scope()  # Inicializa o osciloscópio ChipWhisperer
+target = cw.target(scope)  # Inicializa o alvo conectado ao ChipWhisperer
+
+# Configurando o ChipWhisperer
+scope.gain.gain = 45
+scope.adc.samples = 5000
+scope.adc.offset = 0
+scope.adc.basic_mode = "rising_edge"
+scope.clock.clkgen_freq = 7370000
+scope.clock.adc_src = "clkgen_x4"
+scope.trigger.triggers = "tio4"
+scope.io.tio1 = "serial_tx"
+scope.io.tio2 = "serial_rx"
+scope.io.hs2 = "clkgen"
+
+# Configurando a comunicação UART do alvo
+target.baud = TARGET_BAUDRATE
+
+# Listas para armazenar os resultados bem-sucedidos
+successful_voltages = []
+successful_durations = []
+
+# Função para realizar a injeção de falha de tensão
+def voltage_fault_injection(voltage, duration):
+    # Configurando o módulo de glitch do ChipWhisperer
+    scope.glitch.clk_src = "clkgen"
+    scope.glitch.output = "glitch_only"
+    scope.glitch.trigger_src = "ext_single"
+    scope.glitch.width = 0.1
+    scope.glitch.offset = 0.2
+    scope.glitch.repeat = duration
+    scope.glitch.ext_offset = 10
+    scope.glitch.voltage = voltage
+    scope.glitch.enabled = True
+
+    # Aguardando o gatilho via UART
+    while True:
+        rx_data = target.read()  # Lê os dados recebidos via UART
+        if UART_TRIGGER_STRING in rx_data:
+            print(f"Gatilho UART detectado! Iniciando injeção de falha com tensão {voltage}V e duração {duration} ciclos...")
+            scope.arm()  # Prepara o ChipWhisperer para a injeção de falha
+            time.sleep(0.1)
+            if not scope.capture():  # Realiza a injeção de falha
+                print("Injeção de falha realizada!")
+                successful_voltages.append(voltage)
+                successful_durations.append(duration)
+            else:
+                print("Erro na injeção de falha.")
+            break
+
+# Realizando a injeção de falha de tensão com incrementos
+for voltage in range(VFI_VOLTAGE_START, VFI_VOLTAGE_END + VFI_VOLTAGE_STEP, VFI_VOLTAGE_STEP):
+    for duration in range(VFI_DURATION_START, VFI_DURATION_END + VFI_DURATION_STEP, VFI_DURATION_STEP):
+        voltage_fault_injection(voltage, duration)
+
+# Plotando os resultados bem-sucedidos em um gráfico
+plt.scatter(successful_voltages, successful_durations, color='green', marker='o')
+plt.title('Injeções de Falha Bem-sucedidas')
+plt.xlabel('Tensão de Injeção (V)')
+plt.ylabel('Duração da Injeção (ciclos)')
+plt.grid(True)
+plt.show()  # Exibe o gráfico
+
+# Desconectando e limpando os recursos
+scope.dis()  # Desconecta o osciloscópio ChipWhisperer
+target.dis()  # Desconecta o alvo
